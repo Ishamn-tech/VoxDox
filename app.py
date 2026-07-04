@@ -20,7 +20,8 @@ st.set_page_config(page_title="VoxDoc", page_icon="🎙", layout="wide",
 # ── SESSION STATE ────────────────────────────────────────────────
 for k, v in {"dark_mode": True, "transcript_done": False, "paragraphs": [],
               "segments_raw": [], "duration": 0, "video_name": "",
-              "edited_transcript": ""}.items():
+              "edited_transcript": "", "loaded_video_path": None,
+              "loaded_video_name": "", "loaded_video_url": ""}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -43,9 +44,12 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Bricolage+Grotesque:wght@400;600;700;800&display=swap');
 
-html,body,[class*="css"],.stApp {{
+html,body,[data-testid="stAppViewContainer"],.stApp {{
     font-family:'Bricolage Grotesque',sans-serif !important;
     background:{BG} !important; color:{TEXT} !important;
+}}
+.main {{
+    overflow-y: auto !important;
 }}
 #MainMenu,footer {{visibility:hidden;}}
 .block-container {{padding:1.5rem 2rem 2rem 2rem !important; max-width:100% !important;}}
@@ -260,6 +264,13 @@ with st.sidebar:
 
     st.divider()
     if st.button("🗑  Clear session", use_container_width=True):
+        old_path = st.session_state.get("loaded_video_path")
+        if old_path and os.path.exists(old_path):
+            try: os.remove(old_path)
+            except: pass
+        st.session_state.loaded_video_path = None
+        st.session_state.loaded_video_name = ""
+        st.session_state.loaded_video_url  = ""
         st.session_state.transcript_done   = False
         st.session_state.paragraphs        = []
         st.session_state.segments_raw      = []
@@ -278,8 +289,7 @@ with st.sidebar:
         st.info("⬆ Upload a file or paste a link to begin")
 
 
-# ════════════════════════════════════════════════════════════════
-#  TOPBAR  — native st.columns (no sticky div)
+# ── TOPBAR  — native st.columns (no sticky div)
 # ════════════════════════════════════════════════════════════════
 tb1, tb2, tb3 = st.columns([2, 5, 3])
 
@@ -287,10 +297,15 @@ with tb1:
     st.markdown(f"### 🎙 VoxDoc")
 
 with tb2:
-    label = (st.session_state.video_name[:65] + "..."
-             if len(st.session_state.video_name) > 65
-             else st.session_state.video_name) if st.session_state.transcript_done \
-             else "No file loaded — upload or paste a link below"
+    vname = st.session_state.get("video_name") or st.session_state.get("loaded_video_name", "")
+    if vname:
+        label = vname
+        if len(label) > 65:
+            label = label[:65] + "..."
+        if not st.session_state.transcript_done:
+            label = f"Loaded: {label} (Ready to transcribe)"
+    else:
+        label = "No file loaded — upload or paste a link below"
     st.markdown(f"<p style='color:{TEXT2};font-family:Geist Mono,monospace;"
                 f"font-size:.78rem;padding-top:14px;'>{label}</p>",
                 unsafe_allow_html=True)
@@ -327,44 +342,128 @@ with col_l:
     video_path = audio_path = video_name = None
 
     if input_method == "Upload File":
+        if st.session_state.loaded_video_url:
+            st.session_state.loaded_video_url = ""
+            
         uploaded = st.file_uploader(
             "", type=["mp4", "mov", "avi", "mkv", "webm", "m4v"],
             label_visibility="collapsed")
         if uploaded:
-            ext = os.path.splitext(uploaded.name)[-1]
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                tmp.write(uploaded.read())
-                video_path = tmp.name
-            video_name = uploaded.name
+            if st.session_state.loaded_video_name != uploaded.name:
+                old_path = st.session_state.loaded_video_path
+                if old_path and os.path.exists(old_path):
+                    try: os.remove(old_path)
+                    except: pass
+                ext = os.path.splitext(uploaded.name)[-1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                    tmp.write(uploaded.read())
+                    video_path = tmp.name
+                st.session_state.loaded_video_path = video_path
+                st.session_state.loaded_video_name = uploaded.name
+                st.session_state.video_name = uploaded.name
+                st.session_state.transcript_done = False
+                st.session_state.paragraphs = []
+                st.session_state.segments_raw = []
+                st.session_state.duration = 0
+                st.session_state.edited_transcript = ""
+                st.rerun()
+            else:
+                video_path = st.session_state.loaded_video_path
+                video_name = st.session_state.loaded_video_name
+
             st.video(uploaded)
             c1, c2, c3 = st.columns(3)
+            ext = os.path.splitext(uploaded.name)[-1]
             c1.markdown(f"<span class='vd-badge bg'>{ext.upper().strip('.')}</span>",
                         unsafe_allow_html=True)
             c2.markdown(f"<span class='vd-badge bt'>{round(uploaded.size/1024/1024,1)} MB</span>",
                         unsafe_allow_html=True)
             c3.markdown("<span class='vd-badge bp'>Ready</span>", unsafe_allow_html=True)
+        else:
+            if st.session_state.loaded_video_name or st.session_state.loaded_video_path:
+                old_path = st.session_state.loaded_video_path
+                if old_path and os.path.exists(old_path):
+                    try: os.remove(old_path)
+                    except: pass
+                st.session_state.loaded_video_path = None
+                st.session_state.loaded_video_name = ""
+                st.session_state.video_name = ""
+                st.session_state.transcript_done = False
+                st.session_state.paragraphs = []
+                st.session_state.segments_raw = []
+                st.session_state.duration = 0
+                st.session_state.edited_transcript = ""
+                st.rerun()
     else:
+        if st.session_state.loaded_video_name and not st.session_state.loaded_video_url:
+            old_path = st.session_state.loaded_video_path
+            if old_path and os.path.exists(old_path):
+                try: os.remove(old_path)
+                except: pass
+            st.session_state.loaded_video_path = None
+            st.session_state.loaded_video_name = ""
+            st.session_state.video_name = ""
+            st.session_state.transcript_done = False
+            st.session_state.paragraphs = []
+            st.session_state.segments_raw = []
+            st.session_state.duration = 0
+            st.session_state.edited_transcript = ""
+
         url = st.text_input("", placeholder="https://youtube.com/watch?v=...",
                              label_visibility="collapsed")
         if url:
-            with st.spinner("Downloading..."):
-                try:
-                    import yt_dlp
-                    with tempfile.TemporaryDirectory() as td:
-                        opts = {'format': 'best[ext=mp4]/best',
-                                'outtmpl': os.path.join(td, 'video.%(ext)s'),
-                                'quiet': True}
-                        with yt_dlp.YoutubeDL(opts) as ydl:
-                            info = ydl.extract_info(url, download=True)
-                            video_name = info.get('title', 'video')
-                            ext = f".{info['ext']}"
-                            src = os.path.join(td, f"video.{info['ext']}")
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                                tmp.write(open(src, 'rb').read())
-                                video_path = tmp.name
-                    st.success(f"Downloaded: {video_name[:55]}")
-                except Exception as e:
-                    st.error(f"Failed: {e}")
+            if st.session_state.loaded_video_url != url:
+                old_path = st.session_state.loaded_video_path
+                if old_path and os.path.exists(old_path):
+                    try: os.remove(old_path)
+                    except: pass
+                with st.spinner("Downloading..."):
+                    try:
+                        import yt_dlp
+                        with tempfile.TemporaryDirectory() as td:
+                            opts = {'format': 'best[ext=mp4]/best',
+                                    'outtmpl': os.path.join(td, 'video.%(ext)s'),
+                                    'quiet': True}
+                            with yt_dlp.YoutubeDL(opts) as ydl:
+                                info = ydl.extract_info(url, download=True)
+                                video_name = info.get('title', 'video')
+                                ext = f".{info['ext']}"
+                                src = os.path.join(td, f"video.{info['ext']}")
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                                    tmp.write(open(src, 'rb').read())
+                                    video_path = tmp.name
+                        st.session_state.loaded_video_path = video_path
+                        st.session_state.loaded_video_name = video_name
+                        st.session_state.loaded_video_url = url
+                        st.session_state.video_name = video_name
+                        st.session_state.transcript_done = False
+                        st.session_state.paragraphs = []
+                        st.session_state.segments_raw = []
+                        st.session_state.duration = 0
+                        st.session_state.edited_transcript = ""
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            else:
+                video_path = st.session_state.loaded_video_path
+                video_name = st.session_state.loaded_video_name
+                st.success(f"Downloaded: {video_name[:55]}")
+        else:
+            if st.session_state.loaded_video_url or st.session_state.loaded_video_path:
+                old_path = st.session_state.loaded_video_path
+                if old_path and os.path.exists(old_path):
+                    try: os.remove(old_path)
+                    except: pass
+                st.session_state.loaded_video_path = None
+                st.session_state.loaded_video_name = ""
+                st.session_state.loaded_video_url = ""
+                st.session_state.video_name = ""
+                st.session_state.transcript_done = False
+                st.session_state.paragraphs = []
+                st.session_state.segments_raw = []
+                st.session_state.duration = 0
+                st.session_state.edited_transcript = ""
+                st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -423,9 +522,8 @@ with col_r:
                     st.session_state.edited_transcript = "\n\n".join(
                         [p for p, _, _ in paras])
 
-                    for p in [video_path, audio_path]:
-                        try: os.remove(p)
-                        except: pass
+                    try: os.remove(audio_path)
+                    except: pass
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
