@@ -1,0 +1,5 @@
+streamlit
+faster-whisper
+reportlab
+moviepy
+yt-dlp
